@@ -1,0 +1,242 @@
+type User {
+  id: ID!
+  name: String!
+  email: String!
+  role: UserRole!
+  createdAt: String!
+  updatedAt: String!
+  teams: [Team!]
+  ownedJobs: [Job!]
+}
+
+enum UserRole {
+  ADMIN
+  RECRUITER
+  HIRING_MANAGER
+  INTERVIEWER
+}
+
+type Team {
+  id: ID!
+  name: String!
+  description: String
+  members: [User!]!
+  jobs: [Job!]!
+}
+
+type Job {
+  id: ID!
+  title: String!
+  description: String!
+  status: JobStatus!
+  location: String
+  salary: SalaryRange
+  requirements: [String!]
+  pipeline: Pipeline!
+  hiringManager: User!
+  recruiters: [User!]!
+  createdAt: String!
+  updatedAt: String!
+  candidates: [Candidate!]!
+}
+
+enum JobStatus {
+  DRAFT
+  OPEN
+  PAUSED
+  CLOSED
+  FILLED
+}
+
+type SalaryRange {
+  min: Float
+  max: Float
+  currency: String!
+}
+
+type Pipeline {
+  id: ID!
+  name: String!
+  job: Job!
+  stages: [Stage!]!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type Stage {
+  id: ID!
+  name: String!
+  order: Int!
+  pipeline: Pipeline!
+  assessments: [Assessment!]
+  candidates: [Candidate!]!
+}
+
+type Candidate {
+  id: ID!
+  firstName: String!
+  lastName: String!
+  email: String!
+  phone: String
+  resume: String
+  source: String
+  status: CandidateStatus!
+  jobs: [Job!]!
+  currentStage: Stage
+  notes: [Note!]!
+  assessments: [AssessmentGrade!]!
+  createdAt: String!
+  updatedAt: String!
+}
+
+enum CandidateStatus {
+  NEW
+  IN_PROGRESS
+  ON_HOLD
+  REJECTED
+  OFFERED
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+}
+
+type Note {
+  id: ID!
+  content: String!
+  candidate: Candidate!
+  author: User!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type Assessment {
+  id: ID!
+  name: String!
+  description: String!
+  type: AssessmentType!
+  stage: Stage!
+  questions: [AssessmentQuestion!]
+  createdAt: String!
+  updatedAt: String!
+}
+
+enum AssessmentType {
+  TECHNICAL
+  BEHAVIORAL
+  CULTURAL
+  CASE_STUDY
+  ASSIGNMENT
+}
+
+type AssessmentQuestion {
+  id: ID!
+  content: String!
+  assessment: Assessment!
+}
+
+type AssessmentGrade {
+  id: ID!
+  assessment: Assessment!
+  candidate: Candidate!
+  interviewer: User!
+  score: Float
+  feedback: String!
+  strengths: [String!]
+  weaknesses: [String!]
+  recommendation: Recommendation!
+  createdAt: String!
+  updatedAt: String!
+}
+
+enum Recommendation {
+  STRONG_YES
+  YES
+  NEUTRAL
+  NO
+  STRONG_NO
+}
+
+input IntRange {
+  min: Int
+  max: Int
+}
+
+input DateRange {
+  startDate: String
+  endDate: String
+}
+
+input CandidateSearchInput {
+  skills: [String!]
+  experienceYears: IntRange
+  locations: [String!]
+  education: [String!]
+  educationLevel: [String!]
+  availabilityDate: String
+  salaryExpectation: SalaryRange
+  jobTitles: [String!]
+  industries: [String!]
+  keywordSearch: String
+  tags: [String!]
+  appliedDate: DateRange
+  lastContactDate: DateRange
+}
+
+type Query {
+  user(id: ID!): User
+  users(role: UserRole): [User!]!
+  team(id: ID!): Team
+  teams: [Team!]!
+  job(id: ID!): Job
+  jobs(status: JobStatus): [Job!]!
+  pipeline(id: ID!): Pipeline
+  stage(id: ID!): Stage
+  candidate(id: ID!): Candidate
+  candidates(jobId: ID, stageId: ID, status: CandidateStatus): [Candidate!]!
+  assessment(id: ID!): Assessment
+  assessmentGrade(id: ID!): AssessmentGrade
+  candidateAssessments(candidateId: ID!): [AssessmentGrade!]!
+  searchCandidates(search: CandidateSearchInput!): [Candidate!]!
+}
+
+type Mutation {
+  createUser(name: String!, email: String!, role: UserRole!): User!
+  updateUser(id: ID!, name: String, email: String, role: UserRole): User!
+  deleteUser(id: ID!): Boolean!
+  
+  createTeam(name: String!, description: String): Team!
+  updateTeam(id: ID!, name: String, description: String): Team!
+  deleteTeam(id: ID!): Boolean!
+  addUserToTeam(userId: ID!, teamId: ID!): Team!
+  removeUserFromTeam(userId: ID!, teamId: ID!): Team!
+  
+  createJob(title: String!, description: String!, hiringManagerId: ID!, location: String, salaryMin: Float, salaryMax: Float, salaryCurrency: String, requirements: [String!]): Job!
+  updateJob(id: ID!, title: String, description: String, status: JobStatus, location: String, salaryMin: Float, salaryMax: Float, salaryCurrency: String, requirements: [String!]): Job!
+  deleteJob(id: ID!): Boolean!
+  assignRecruiterToJob(jobId: ID!, recruiterId: ID!): Job!
+  
+  createPipeline(name: String!, jobId: ID!): Pipeline!
+  updatePipeline(id: ID!, name: String!): Pipeline!
+  deletePipeline(id: ID!): Boolean!
+  
+  createStage(name: String!, pipelineId: ID!, order: Int!): Stage!
+  updateStage(id: ID!, name: String, order: Int): Stage!
+  deleteStage(id: ID!): Boolean!
+  
+  createCandidate(firstName: String!, lastName: String!, email: String!, phone: String, resume: String, source: String, jobId: ID!): Candidate!
+  updateCandidate(id: ID!, firstName: String, lastName: String, email: String, phone: String, resume: String, source: String, status: CandidateStatus): Candidate!
+  deleteCandidate(id: ID!): Boolean!
+  moveCandidate(candidateId: ID!, stageId: ID!): Candidate!
+  
+  createNote(content: String!, candidateId: ID!, authorId: ID!): Note!
+  updateNote(id: ID!, content: String!): Note!
+  deleteNote(id: ID!): Boolean!
+  
+  createAssessment(name: String!, description: String!, type: AssessmentType!, stageId: ID!): Assessment!
+  updateAssessment(id: ID!, name: String, description: String, type: AssessmentType): Assessment!
+  deleteAssessment(id: ID!): Boolean!
+  
+  createAssessmentGrade(assessmentId: ID!, candidateId: ID!, interviewerId: ID!, score: Float, feedback: String!, strengths: [String!], weaknesses: [String!], recommendation: Recommendation!): AssessmentGrade!
+  updateAssessmentGrade(id: ID!, score: Float, feedback: String, strengths: [String!], weaknesses: [String!], recommendation: Recommendation): AssessmentGrade!
+  deleteAssessmentGrade(id: ID!): Boolean!
+}
