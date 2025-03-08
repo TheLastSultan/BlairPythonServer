@@ -8,9 +8,6 @@ from datetime import datetime
 # Load OpenAI API key from environment variable
 client = openai.Client(api_key=os.environ.get("OPENAI_API_KEY"))
 
-# Set this to True to simulate a delay for more realistic API behavior
-SIMULATE_DELAY = True
-
 # Function definitions as a list of dictionaries to be passed to OpenAI API
 ats_functions = [
     # User functions
@@ -31,7 +28,11 @@ ats_functions = [
         "parameters": {
             "type": "object",
             "properties": {
-                "role": {"type": "string", "enum": ["ADMIN", "RECRUITER", "HIRING_MANAGER", "INTERVIEWER"], "description": "User role filter"},
+                "role": {
+                    "type": "string",
+                    "enum": ["ADMIN", "RECRUITER", "HIRING_MANAGER", "INTERVIEWER"],
+                    "description": "User role filter",
+                },
             },
         },
     },
@@ -43,12 +44,15 @@ ats_functions = [
             "properties": {
                 "name": {"type": "string", "description": "User's full name"},
                 "email": {"type": "string", "description": "User's email"},
-                "role": {"type": "string", "enum": ["ADMIN", "RECRUITER", "HIRING_MANAGER", "INTERVIEWER"], "description": "User role"},
+                "role": {
+                    "type": "string",
+                    "enum": ["ADMIN", "RECRUITER", "HIRING_MANAGER", "INTERVIEWER"],
+                    "description": "User role",
+                },
             },
             "required": ["name", "email", "role"],
         },
     },
-    
     # Team functions
     {
         "name": "getTeam",
@@ -93,7 +97,6 @@ ats_functions = [
             "required": ["userId", "teamId"],
         },
     },
-    
     # Job functions
     {
         "name": "getJob",
@@ -112,7 +115,11 @@ ats_functions = [
         "parameters": {
             "type": "object",
             "properties": {
-                "status": {"type": "string", "enum": ["DRAFT", "OPEN", "PAUSED", "CLOSED", "FILLED"], "description": "Job status filter"},
+                "status": {
+                    "type": "string",
+                    "enum": ["DRAFT", "OPEN", "PAUSED", "CLOSED", "FILLED"],
+                    "description": "Job status filter",
+                },
             },
         },
     },
@@ -124,12 +131,19 @@ ats_functions = [
             "properties": {
                 "title": {"type": "string", "description": "Job title"},
                 "description": {"type": "string", "description": "Job description"},
-                "hiringManagerId": {"type": "string", "description": "Hiring manager user ID"},
+                "hiringManagerId": {
+                    "type": "string",
+                    "description": "Hiring manager user ID",
+                },
                 "location": {"type": "string", "description": "Job location"},
                 "salaryMin": {"type": "number", "description": "Minimum salary"},
                 "salaryMax": {"type": "number", "description": "Maximum salary"},
                 "salaryCurrency": {"type": "string", "description": "Salary currency"},
-                "requirements": {"type": "array", "items": {"type": "string"}, "description": "Job requirements"},
+                "requirements": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Job requirements",
+                },
             },
             "required": ["title", "description", "hiringManagerId"],
         },
@@ -146,7 +160,6 @@ ats_functions = [
             "required": ["jobId", "recruiterId"],
         },
     },
-    
     # Pipeline and Stage functions
     {
         "name": "getPipeline",
@@ -179,12 +192,14 @@ ats_functions = [
             "properties": {
                 "name": {"type": "string", "description": "Stage name"},
                 "pipelineId": {"type": "string", "description": "Pipeline ID"},
-                "order": {"type": "integer", "description": "Stage order in the pipeline"},
+                "order": {
+                    "type": "integer",
+                    "description": "Stage order in the pipeline",
+                },
             },
             "required": ["name", "pipelineId", "order"],
         },
     },
-    
     # Candidate functions
     {
         "name": "getCandidate",
@@ -205,7 +220,20 @@ ats_functions = [
             "properties": {
                 "jobId": {"type": "string", "description": "Job ID filter"},
                 "stageId": {"type": "string", "description": "Stage ID filter"},
-                "status": {"type": "string", "enum": ["NEW", "IN_PROGRESS", "ON_HOLD", "REJECTED", "OFFERED", "ACCEPTED", "DECLINED", "WITHDRAWN"], "description": "Candidate status filter"},
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "NEW",
+                        "IN_PROGRESS",
+                        "ON_HOLD",
+                        "REJECTED",
+                        "OFFERED",
+                        "ACCEPTED",
+                        "DECLINED",
+                        "WITHDRAWN",
+                    ],
+                    "description": "Candidate status filter",
+                },
             },
         },
     },
@@ -215,12 +243,21 @@ ats_functions = [
         "parameters": {
             "type": "object",
             "properties": {
-                "firstName": {"type": "string", "description": "Candidate's first name"},
+                "firstName": {
+                    "type": "string",
+                    "description": "Candidate's first name",
+                },
                 "lastName": {"type": "string", "description": "Candidate's last name"},
                 "email": {"type": "string", "description": "Candidate's email"},
                 "phone": {"type": "string", "description": "Candidate's phone number"},
-                "resume": {"type": "string", "description": "URL to candidate's resume"},
-                "source": {"type": "string", "description": "Where the candidate was sourced from"},
+                "resume": {
+                    "type": "string",
+                    "description": "URL to candidate's resume",
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Where the candidate was sourced from",
+                },
                 "jobId": {"type": "string", "description": "Job ID"},
             },
             "required": ["firstName", "lastName", "email", "jobId"],
@@ -233,7 +270,10 @@ ats_functions = [
             "type": "object",
             "properties": {
                 "candidateId": {"type": "string", "description": "Candidate ID"},
-                "stageId": {"type": "string", "description": "Stage ID to move candidate to"},
+                "stageId": {
+                    "type": "string",
+                    "description": "Stage ID to move candidate to",
+                },
             },
             "required": ["candidateId", "stageId"],
         },
@@ -245,7 +285,20 @@ ats_functions = [
             "type": "object",
             "properties": {
                 "id": {"type": "string", "description": "Candidate ID"},
-                "status": {"type": "string", "enum": ["NEW", "IN_PROGRESS", "ON_HOLD", "REJECTED", "OFFERED", "ACCEPTED", "DECLINED", "WITHDRAWN"], "description": "New candidate status"},
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "NEW",
+                        "IN_PROGRESS",
+                        "ON_HOLD",
+                        "REJECTED",
+                        "OFFERED",
+                        "ACCEPTED",
+                        "DECLINED",
+                        "WITHDRAWN",
+                    ],
+                    "description": "New candidate status",
+                },
             },
             "required": ["id", "status"],
         },
@@ -257,88 +310,87 @@ ats_functions = [
             "type": "object",
             "properties": {
                 "skills": {
-                    "type": "array", 
-                    "items": {"type": "string"}, 
-                    "description": "List of skills to search for"
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of skills to search for",
                 },
                 "experienceYearsMin": {
-                    "type": "integer", 
-                    "description": "Minimum years of experience"
+                    "type": "integer",
+                    "description": "Minimum years of experience",
                 },
                 "experienceYearsMax": {
-                    "type": "integer", 
-                    "description": "Maximum years of experience"
+                    "type": "integer",
+                    "description": "Maximum years of experience",
                 },
                 "locations": {
-                    "type": "array", 
-                    "items": {"type": "string"}, 
-                    "description": "List of locations to search for"
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of locations to search for",
                 },
                 "education": {
-                    "type": "array", 
-                    "items": {"type": "string"}, 
-                    "description": "List of education institutions to search for"
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of education institutions to search for",
                 },
                 "educationLevel": {
-                    "type": "array", 
-                    "items": {"type": "string"}, 
-                    "description": "List of education levels to search for (e.g., Bachelor's, Master's, PhD)"
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of education levels to search for (e.g., Bachelor's, Master's, PhD)",
                 },
                 "availabilityDate": {
-                    "type": "string", 
-                    "description": "Date when candidate is available to start"
+                    "type": "string",
+                    "description": "Date when candidate is available to start",
                 },
                 "salaryMin": {
-                    "type": "number", 
-                    "description": "Minimum salary expectation"
+                    "type": "number",
+                    "description": "Minimum salary expectation",
                 },
                 "salaryMax": {
-                    "type": "number", 
-                    "description": "Maximum salary expectation"
+                    "type": "number",
+                    "description": "Maximum salary expectation",
                 },
                 "salaryCurrency": {
-                    "type": "string", 
-                    "description": "Currency for salary range"
+                    "type": "string",
+                    "description": "Currency for salary range",
                 },
                 "jobTitles": {
-                    "type": "array", 
-                    "items": {"type": "string"}, 
-                    "description": "List of job titles to search for"
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of job titles to search for",
                 },
                 "industries": {
-                    "type": "array", 
-                    "items": {"type": "string"}, 
-                    "description": "List of industries to search for"
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of industries to search for",
                 },
                 "keywordSearch": {
-                    "type": "string", 
-                    "description": "Keyword(s) to search across all text fields"
+                    "type": "string",
+                    "description": "Keyword(s) to search across all text fields",
                 },
                 "tags": {
-                    "type": "array", 
-                    "items": {"type": "string"}, 
-                    "description": "List of tags to search for"
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of tags to search for",
                 },
                 "appliedDateStart": {
-                    "type": "string", 
-                    "description": "Start date for when candidate applied"
+                    "type": "string",
+                    "description": "Start date for when candidate applied",
                 },
                 "appliedDateEnd": {
-                    "type": "string", 
-                    "description": "End date for when candidate applied"
+                    "type": "string",
+                    "description": "End date for when candidate applied",
                 },
                 "lastContactDateStart": {
-                    "type": "string", 
-                    "description": "Start date for when candidate was last contacted"
+                    "type": "string",
+                    "description": "Start date for when candidate was last contacted",
                 },
                 "lastContactDateEnd": {
-                    "type": "string", 
-                    "description": "End date for when candidate was last contacted"
-                }
-            }
+                    "type": "string",
+                    "description": "End date for when candidate was last contacted",
+                },
+            },
         },
     },
-    
     # Note functions
     {
         "name": "createNote",
@@ -353,7 +405,6 @@ ats_functions = [
             "required": ["content", "candidateId", "authorId"],
         },
     },
-    
     # Assessment functions
     {
         "name": "getAssessment",
@@ -373,8 +424,21 @@ ats_functions = [
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Assessment name"},
-                "description": {"type": "string", "description": "Assessment description"},
-                "type": {"type": "string", "enum": ["TECHNICAL", "BEHAVIORAL", "CULTURAL", "CASE_STUDY", "ASSIGNMENT"], "description": "Assessment type"},
+                "description": {
+                    "type": "string",
+                    "description": "Assessment description",
+                },
+                "type": {
+                    "type": "string",
+                    "enum": [
+                        "TECHNICAL",
+                        "BEHAVIORAL",
+                        "CULTURAL",
+                        "CASE_STUDY",
+                        "ASSIGNMENT",
+                    ],
+                    "description": "Assessment type",
+                },
                 "stageId": {"type": "string", "description": "Stage ID"},
             },
             "required": ["name", "description", "type", "stageId"],
@@ -410,17 +474,39 @@ ats_functions = [
             "properties": {
                 "assessmentId": {"type": "string", "description": "Assessment ID"},
                 "candidateId": {"type": "string", "description": "Candidate ID"},
-                "interviewerId": {"type": "string", "description": "Interviewer user ID"},
+                "interviewerId": {
+                    "type": "string",
+                    "description": "Interviewer user ID",
+                },
                 "score": {"type": "number", "description": "Assessment score"},
                 "feedback": {"type": "string", "description": "Assessment feedback"},
-                "strengths": {"type": "array", "items": {"type": "string"}, "description": "Candidate strengths identified"},
-                "weaknesses": {"type": "array", "items": {"type": "string"}, "description": "Candidate weaknesses identified"},
-                "recommendation": {"type": "string", "enum": ["STRONG_YES", "YES", "NEUTRAL", "NO", "STRONG_NO"], "description": "Overall recommendation"},
+                "strengths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Candidate strengths identified",
+                },
+                "weaknesses": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Candidate weaknesses identified",
+                },
+                "recommendation": {
+                    "type": "string",
+                    "enum": ["STRONG_YES", "YES", "NEUTRAL", "NO", "STRONG_NO"],
+                    "description": "Overall recommendation",
+                },
             },
-            "required": ["assessmentId", "candidateId", "interviewerId", "feedback", "recommendation"],
+            "required": [
+                "assessmentId",
+                "candidateId",
+                "interviewerId",
+                "feedback",
+                "recommendation",
+            ],
         },
     },
 ]
+
 
 # Mock backend implementation - this simulates the GraphQL backend
 def mock_graphql_response(function_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -434,17 +520,20 @@ def mock_graphql_response(function_name: str, params: Dict[str, Any]) -> Dict[st
     Include realistic data for all relevant fields.
     
     Response:"""
-    
+
     # Call ChatGPT to generate mock data
     response = client.chat.completions.create(
         model="gpt-4-turbo",  # or whatever model is available to you
         messages=[
-            {"role": "system", "content": "You are a helpful assistant that generates mock JSON responses for an ATS GraphQL API."},
-            {"role": "user", "content": prompt}
+            {
+                "role": "system",
+                "content": "You are a helpful assistant that generates mock JSON responses for an ATS GraphQL API.",
+            },
+            {"role": "user", "content": prompt},
         ],
         temperature=0.7,
     )
-    
+
     # Extract the generated JSON from the response
     try:
         result_text = response.choices[0].message.content
@@ -453,42 +542,38 @@ def mock_graphql_response(function_name: str, params: Dict[str, Any]) -> Dict[st
             result_text = result_text.split("```json")[1].split("```")[0].strip()
         elif "```" in result_text:
             result_text = result_text.split("```")[1].split("```")[0].strip()
-        
+
         result = json.loads(result_text)
         return result
     except Exception as e:
         return {
             "error": f"Failed to generate mock response: {str(e)}",
             "function": function_name,
-            "params": params
+            "params": params,
         }
+
 
 # Function implementation that will be used by the agent
 def execute_function(function_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a function call to the mock GraphQL backend"""
     # Create a unique request ID for tracking
     request_id = str(uuid.uuid4())
-    
+
     # Log the function call
-    print(f"[{datetime.now().isoformat()}] Function call: {function_name}, Request ID: {request_id}")
+    print(
+        f"[{datetime.now().isoformat()}] Function call: {function_name}, Request ID: {request_id}"
+    )
     print(f"Parameters: {json.dumps(params, indent=2)}")
-    
-    # Simulate network delay for more realistic behavior
-    if SIMULATE_DELAY:
-        import random
-        import time
-        # Random delay between 0.5 and 2 seconds
-        delay = random.uniform(0.5, 2.0)
-        time.sleep(delay)
-    
+
     # Call the mock backend
     result = mock_graphql_response(function_name, params)
-    
+
     # Log the result
     print(f"[{datetime.now().isoformat()}] Response for request ID: {request_id}")
     print(f"Result: {json.dumps(result, indent=2)}")
-    
+
     return result
+
 
 # Get the list of available functions for the agent
 def get_available_functions():
