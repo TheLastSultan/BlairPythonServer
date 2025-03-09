@@ -5,20 +5,46 @@ import openai
 import asyncio
 from typing import Dict, List, Any, Optional, Union
 import argparse
+import logging
+import dotenv
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+# Load environment variables from .env file
+dotenv.load_dotenv()
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Add parent directory to path to import functions
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from functions.ats_functions import get_available_functions, execute_function
 
+# Load OpenAI API key from environment variable
+api_key = os.environ.get("OPENAI_API_KEY")
+if not api_key:
+    logger.warning("OPENAI_API_KEY environment variable is not set or empty")
+    print("Error: OPENAI_API_KEY environment variable is not set or empty")
+
 # Initialize OpenAI client
-client = openai.AsyncClient(api_key=os.environ.get("OPENAI_API_KEY"))
+try:
+    client = openai.AsyncClient(api_key=api_key)
+except Exception as e:
+    logger.error(f"Failed to initialize OpenAI client: {str(e)}")
+    print(f"Error initializing OpenAI client: {str(e)}")
+    client = None
 
 # Initialize rich console for better formatting
 console = Console()
+
+# Initialize FastAPI app
+app = FastAPI(title="AI Recruiter API")
 
 class RecruiterAgent:
     def __init__(self, model="gpt-4-turbo"):
@@ -167,16 +193,61 @@ async def async_main():
         console.print("\n[bold purple]AI Recruiter[/bold purple]:")
         console.print(Markdown(response))
 
+# Pydantic models for API requests and responses
+class MessageRequest(BaseModel):
+    user_id: str
+    message: str
+    session_id: Optional[str] = None
+
+class MessageResponse(BaseModel):
+    response: str
+    session_id: str
+
+# Dictionary to store agent instances by session_id
+agent_sessions = {}
+
+# API endpoints
+@app.post("/", response_model=MessageResponse)
+async def process_message(request: MessageRequest):
+    """Process a message from the user and return the assistant's response"""
+    try:
+        # Get or create an agent for this session
+        session_id = request.session_id or request.user_id
+        if session_id not in agent_sessions:
+            agent_sessions[session_id] = RecruiterAgent()
+            
+        # Process the message
+        agent = agent_sessions[session_id]
+        response = await agent.process_message(request.message)
+        
+        return MessageResponse(
+            response=response,
+            session_id=session_id
+        )
+    except Exception as e:
+        logger.error(f"Error processing message: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
+
 def main():
     """Entry point for the application"""
     try:
-        # Run the async main function
-        asyncio.run(async_main())
+        # Check if CLI mode or web server mode
+        if len(sys.argv) > 1 and sys.argv[1] == "--web":
+            # Start the FastAPI server with uvicorn
+            import uvicorn
+            port = int(os.environ.get("PORT", 8000))
+            host = os.environ.get("HOST", "0.0.0.0")
+            console.print(f"Starting web server on {host}:{port}...")
+            uvicorn.run(app, host=host, port=port)
+        else:
+            # Run the async main function in CLI mode
+            asyncio.run(async_main())
     except KeyboardInterrupt:
         # Handle Ctrl+C gracefully
         console.print("\n\n[bold]Program interrupted. Exiting...[/bold]")
     except Exception as e:
         # Handle any unexpected errors
+        logger.error(f"Unexpected error: {str(e)}")
         console.print(f"\n\n[bold red]Error: {str(e)}[/bold red]")
 
 if __name__ == "__main__":

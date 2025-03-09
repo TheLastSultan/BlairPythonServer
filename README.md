@@ -30,20 +30,38 @@ The agent interacts with a mock GraphQL backend that simulates an Applicant Trac
 Install the required dependencies:
 
 ```bash
-pip install openai rich
+pip install -r requirements.txt
 ```
 
 ## Environment Setup
 
-Export your OpenAI API key as an environment variable:
+Create a `.env` file in the root directory with your API keys:
+
+```
+OPENAI_API_KEY=your-api-key-here
+ADMIN_SECRET=your-admin-secret-here
+USE_MOCK_DATA=true
+```
+
+Or export them as environment variables:
 
 ```bash
 export OPENAI_API_KEY="your-api-key-here"
+export ADMIN_SECRET="your-admin-secret-here"
+export USE_MOCK_DATA="true"
 ```
+
+Environment variables:
+- `OPENAI_API_KEY`: Your OpenAI API key
+- `ADMIN_SECRET`: Hasura admin secret for GraphQL API access
+- `USE_MOCK_DATA`: Set to "true" to use mock data instead of real API calls (default: "false")
+- `PORT`: Port for the web server (default: 8000, web mode only)
 
 ## Usage
 
-Run the recruiter agent:
+### CLI Mode
+
+Run the recruiter agent in interactive CLI mode:
 
 ```bash
 python agent/recruiter_agent.py
@@ -51,6 +69,35 @@ python agent/recruiter_agent.py
 
 Optional arguments:
 - `--model` - Specify the OpenAI model to use (default: gpt-4-turbo)
+
+### Web API Mode
+
+Run the recruiter agent as a FastAPI web server:
+
+```bash
+python agent/recruiter_agent.py --web
+```
+
+This will start a web server on port 8000 (or the port specified in the PORT environment variable).
+
+#### API Endpoints
+
+- **POST /** - Process a user message
+  - Request body:
+    ```json
+    {
+      "user_id": "user123",
+      "message": "Show me all open job positions",
+      "session_id": "optional-session-id"
+    }
+    ```
+  - Response:
+    ```json
+    {
+      "response": "Here are the open job positions...",
+      "session_id": "session-id"
+    }
+    ```
 
 ## Example Interactions
 
@@ -84,9 +131,11 @@ The functions module provides:
 
 The agent provides:
 - A command-line interface for interacting with the ATS
+- A FastAPI web server for API access
 - Integration with the OpenAI API for message processing
 - Function calling capabilities to retrieve and update ATS data
-- Rich text formatting for an improved user experience
+- Rich text formatting for an improved user experience (CLI mode)
+- Stateful conversation handling with session tracking (both CLI and web modes)
 
 ## Note
 
