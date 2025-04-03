@@ -2,13 +2,14 @@ import json
 import openai
 import os
 import requests
-from typing import Dict, List, Any, Optional, Union
 import uuid
 from datetime import datetime
 import logging
 import dotenv
-from functions.ats_schema import ats_function_schema, insert_node_query
+from typing import Dict, List, Any, Optional, Union
 from functions.custom_pipeline import custom_pipeline
+from functions.ats_schema import ats_function_schema, insert_node_query, get_company_id
+from utils.cache import get_redis_data
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
@@ -132,11 +133,12 @@ def generate_job_description(params: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
-def make_hasura_request(graphql_query: str, params: Dict[str, any], request_id: str):
+def make_hasura_request(session_id: str, graphql_query: str, params: Dict[str, any], request_id: str):
     """
     Makes a request to the Hasura GraphQL API.
 
     Args:
+        session_id (str): The session ID for the current user request.
         graphql_query (str): The GraphQL query to execute.
         params (Dict[str, Any]): The parameters for the GraphQL query.
         request_id (str): The unique request ID.
@@ -147,15 +149,26 @@ def make_hasura_request(graphql_query: str, params: Dict[str, any], request_id: 
     logger = logging.getLogger('make_hasura_request')
     hasura_endpoint = "https://talent1.app/hasura/v1/graphql"
     admin_secret = os.environ.get("ADMIN_SECRET")
+    connector = os.environ.get("CONNECTOR")
 
-    if not admin_secret:
-        logger.error("ADMIN_SECRET environment variable is not set")
-        return {"error": "ADMIN_SECRET environment variable is not set", "request_id": request_id}
-
-    headers = {
-        "Content-Type": "application/json",
-        "x-hasura-admin-secret": admin_secret
-    }
+    # Determine headers based on connector type
+    if connector == "terminal":
+        if not admin_secret:
+            logger.error("ADMIN_SECRET environment variable is not set")
+            return {"error": "ADMIN_SECRET environment variable is not set", "request_id": request_id}
+        headers = {
+            "Content-Type": "application/json",
+            "x-hasura-admin-secret": admin_secret
+        }
+    else:
+        token = get_redis_data(f"session:{session_id}")
+        if not token:
+            logger.error("Token not found in Redis for session: " + session_id)
+            return {"error": "Token not found", "request_id": request_id}
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}"
+        }
 
     payload = {
         "query": graphql_query,
@@ -189,10 +202,7 @@ def make_hasura_request(graphql_query: str, params: Dict[str, any], request_id: 
         logger.error(f"GraphQL request failed: {str(e)}")
         return {"error": {str(e)}}
 
-# Function to query Hasura GraphQL API
-
-
-def get_graphql_response(function_name: str, params: Dict[str, Any], use_mock: bool = False) -> Dict[str, Any]:
+def get_graphql_response(session_id: str, function_name: str, params: Dict[str, Any], use_mock: bool = False) -> Dict[str, Any]:
     """
     Executes a GraphQL query for a given function and parameters.
 
@@ -228,16 +238,14 @@ def get_graphql_response(function_name: str, params: Dict[str, Any], use_mock: b
 
     # Get the GraphQL query from the function definition
     graphql_query = function_def["graphQL"]
-    result = make_hasura_request(graphql_query, params, request_id)
+    result = make_hasura_request(session_id, graphql_query, params, request_id)
 
     logger.info(
         f"GraphQL response received for {function_name} (Request ID: {request_id})")
 
     return result
 
-
-# Function implementation that will be used by the agent
-def execute_function(function_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+def execute_function(session_id: str, function_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a function call to the GraphQL backend or fallback to mock"""
     # Create a unique request ID for tracking
     request_id = str(uuid.uuid4())
@@ -253,9 +261,9 @@ def execute_function(function_name: str, params: Dict[str, Any]) -> Dict[str, An
 
     if function_name in graphql_functions:
         # Call the GraphQL API or mock backend
-        result = get_graphql_response(function_name, params, use_mock)
+        result = get_graphql_response(session_id, function_name, params, use_mock)
     else:
-        result = run_functions(function_name, params)
+        result = run_functions(session_id, function_name, params)
     # Log the result
     print(f"[{datetime.now().isoformat()}] Response for request ID: {request_id}")
     print(f"Result: {json.dumps(result, indent=2)}")
@@ -263,7 +271,7 @@ def execute_function(function_name: str, params: Dict[str, Any]) -> Dict[str, An
     return result
 
 
-def create_pipeline(params: Dict[str, Any]) -> Dict[str, Any]:
+def create_pipeline(session_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Creates a pipeline and inserts the nodes into the database.
 
@@ -278,15 +286,24 @@ def create_pipeline(params: Dict[str, Any]) -> Dict[str, Any]:
     description = generate_job_description(params)
     logging.info(f"Generated job description: {description}")
 
+    connector = os.environ.get("CONNECTOR")
+    if connector == "terminal":
+        company_id = "c207a04f-dd58-44bb-a8bb-f4e7bf4dbb18"
+    else:
+        #get company_id from user_id
+        company = make_hasura_request(session_id, get_company_id, {"userId": session_id}, request_id)
+        print("company: ", company)
+        company_id = company['data']['User'][0]['company_id']
+        
     # Build the pipeline object with the provided parameters
-    # company id will be hardcoded for now till we sort out authorization
     pipeline = custom_pipeline(
         pipeline_name=params['pipeline_name'],
         job_title=params['job_title'],
         job_description=description['job_description'],
         job_type=params['job_type'],
         workplace_type=params['workplace_type'],
-        location=params['location']
+        location=params['location'],
+        company_id=company_id,
     )
 
     # Iterate over the nodes in the pipeline and modify them based on their type
@@ -302,7 +319,7 @@ def create_pipeline(params: Dict[str, Any]) -> Dict[str, Any]:
         # if node.get("type") == "assessment":
         #     node["data"]["configs"]["assessment_id"] = "assessment_id"
 
-    data = get_graphql_response("createPipeline", {"object": pipeline})
+    data = get_graphql_response(session_id, "createPipeline", {"object": pipeline})
     pipeline_id = data.get('data', {}).get('insert_Pipeline_one', {}).get('id')
 
     # Prepare and insert nodes associated with the pipeline
@@ -316,23 +333,17 @@ def create_pipeline(params: Dict[str, Any]) -> Dict[str, Any]:
             }
             for node in pipeline["node_flow"]["nodes"]
         ]
-        make_hasura_request(insert_node_query, {
-                            "objects": pipeline_nodes}, request_id)
+        make_hasura_request(session_id, insert_node_query, {"objects": pipeline_nodes}, request_id)
 
         return {"success": True}
     else:
         logging.error("Pipeline ID not found in the response")
         return {"error": "Unable to create pipeline at this time"}
 
-# Get the list of available functions for the agent
-
 
 def get_available_functions():
     return [item["function"] for item in ats_function_schema if "function" in item]
 
-# Run special functions not int ats_schema
-
-
-def run_functions(function_name, params):
+def run_functions(session_id: str, function_name, params):
     if function_name == "createPipeline":
-        return create_pipeline(params)
+        return create_pipeline(session_id, params)

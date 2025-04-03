@@ -151,3 +151,4 @@ ats_function_schema = [
 ]
 
 insert_node_query = "mutation InsertNodes($objects: [PipelineNode_insert_input!]!) {insert_PipelineNode(objects: $objects) {affected_rows}}"
+get_company_id = "query GetUserCompanyId($userId: uuid!) { User(where: {id: {_eq: $userId}}) { company_id } }"

@@ -5,3 +5,4 @@ uvicorn>=0.23.0
 pydantic>=2.4.0
 requests>=2.28.0
 python-dotenv>=1.0.0
+jwt>=2.10.1

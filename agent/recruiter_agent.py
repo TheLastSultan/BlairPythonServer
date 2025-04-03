@@ -1,5 +1,7 @@
 import os
 import sys
+import jwt
+import uuid
 import json
 import openai
 import asyncio
@@ -24,7 +26,9 @@ logger = logging.getLogger(__name__)
 
 # Add parent directory to path to import functions
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from middleware import TokenVerificationMiddleware
 from functions.ats_functions import get_available_functions, execute_function
+from utils.cache import connect_redis, set_redis_data_with_ex, get_redis_data, delete_redis_data, set_redis_data
 
 # Load OpenAI API key from environment variable
 api_key = os.environ.get("OPENAI_API_KEY")
@@ -45,14 +49,26 @@ console = Console()
 
 # Initialize FastAPI app
 app = FastAPI(title="AI Recruiter API")
-
+app.add_middleware(TokenVerificationMiddleware)
 class RecruiterAgent:
-    def __init__(self, model="gpt-4-turbo"):
+    def __init__(self, session_id: str, model="gpt-4-turbo"):
         self.model = model
+        self.session_id = session_id
         self.functions = get_available_functions()
         
-        # Initialize conversation history
-        self.messages = [
+         # Load conversation history from Redis
+        key = f"recruiter_agent:{self.session_id}"
+        state = get_redis_data(key)
+        if state:
+            try:
+                data = json.loads(state)
+                self.messages = data.get("messages", [])
+            except Exception as e:
+                print(f"Error loading state from Redis: {e}")
+                self.messages = []
+        else:    
+            # Initialize conversation history
+            self.messages = [
             {
                 "role": "system",
                 "content": """You are an AI recruiter assistant that helps hiring managers and recruiters manage 
@@ -94,15 +110,23 @@ class RecruiterAgent:
                 """
             }
         ]
-
+            self._save_state()
+            
+    def _save_state(self) -> None:
+        """Save the current conversation state to Redis."""
+        key = f"recruiter_agent:{self.session_id}"
+        data = {"messages": self.messages}
+        set_redis_data(key, json.dumps(data))
+        
     def add_message(self, role: str, content: str) -> None:
         """Add a message to the conversation history"""
         self.messages.append({"role": role, "content": content})
+        self._save_state()
 
     async def call_function(self, function_name: str, function_args: Dict[str, Any]) -> Dict[str, Any]:
         """Call a function and get the result asynchronously"""
         # Use asyncio to run the potentially blocking function in a thread pool
-        result = await asyncio.to_thread(execute_function, function_name, function_args)
+        result = await asyncio.to_thread(execute_function, self.session_id, function_name, function_args)
         return result
 
     async def process_message(self, user_message: str) -> str:
@@ -158,6 +182,7 @@ class RecruiterAgent:
                     "name": function_name,
                     "content": json.dumps(function_response)
                 })
+                self._save_state()
             
             # Get a new response from the model with the function results
             second_response = await client.chat.completions.create(
@@ -173,14 +198,14 @@ class RecruiterAgent:
         self.add_message("assistant", assistant_message.content)
         return assistant_message.content
 
-async def async_main():
+async def async_main(session_id: str):
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='AI Recruiter Agent CLI')
     parser.add_argument('--model', type=str, default='gpt-4-turbo', help='OpenAI model to use')
     args = parser.parse_args()
     
     # Create the agent
-    agent = RecruiterAgent(model=args.model)
+    agent = RecruiterAgent(model=args.model, session_id=session_id)
     
     # Print welcome message
     console.print(Panel.fit(
@@ -211,7 +236,7 @@ async def async_main():
 
 # Pydantic models for API requests and responses
 class MessageRequest(BaseModel):
-    user_id: str
+    # user_id: str
     message: str
     session_id: Optional[str] = None
 
@@ -219,22 +244,33 @@ class MessageResponse(BaseModel):
     response: str
     session_id: str
 
-# Dictionary to store agent instances by session_id
-agent_sessions = {}
-
 # API endpoints
 @app.post("/", response_model=MessageResponse)
-async def process_message(request: MessageRequest):
+async def process_message(message: MessageRequest, req: Request):
     """Process a message from the user and return the assistant's response"""
     try:
-        # Get or create an agent for this session
-        session_id = request.session_id or request.user_id
-        if session_id not in agent_sessions:
-            agent_sessions[session_id] = RecruiterAgent()
-            
+        # Determine session_id based on the middleware-verified token or fallback to request data
+        if req.state.decoded_token:
+            session_id = req.state.decoded_token.get("id")
+            key = f"session:{session_id}"
+            # Update Redis with the raw token from the middleware
+            delete_redis_data(key)
+            set_redis_data_with_ex(key, req.state.token, 3600)
+        elif message.session_id:
+            session_id = message.session_id
+        else:
+            raise HTTPException(status_code=400, detail="session_id or token is required")
+        
+        # Check if the session already exists
+        session = get_redis_data(f"session:{session_id}")
+        if not session:
+            raise HTTPException(status_code=403, detail="Session not found or expired; pass token")
+        
+        # Create a new agent instance
+        agent = RecruiterAgent(session_id=session_id)
+
         # Process the message
-        agent = agent_sessions[session_id]
-        response = await agent.process_message(request.message)
+        response = await agent.process_message(message.message)
         
         return MessageResponse(
             response=response,
@@ -246,6 +282,7 @@ async def process_message(request: MessageRequest):
 
 def main():
     """Entry point for the application"""
+    session_id = str(uuid.uuid4())
     try:
         # Check if CLI mode or web server mode
         if len(sys.argv) > 1 and sys.argv[1] == "--web":
@@ -254,15 +291,21 @@ def main():
             port = int(os.environ.get("PORT", 8000))
             host = os.environ.get("HOST", "0.0.0.0")
             console.print(f"Starting web server on {host}:{port}...")
+            redis_client = connect_redis()
+            if not redis_client:
+                console.print("Redis connection failed. Exiting application.", style="bold red")
+                sys.exit(1)
             uvicorn.run(app, host=host, port=port)
         else:
             # Run the async main function in CLI mode
-            asyncio.run(async_main())
+            asyncio.run(async_main(session_id))
     except KeyboardInterrupt:
         # Handle Ctrl+C gracefully
+        delete_redis_data(f"session:{session_id}")
         console.print("\n\n[bold]Program interrupted. Exiting...[/bold]")
     except Exception as e:
         # Handle any unexpected errors
+        delete_redis_data(f"session:{session_id}")
         logger.error(f"Unexpected error: {str(e)}")
         console.print(f"\n\n[bold red]Error: {str(e)}[/bold red]")
 
