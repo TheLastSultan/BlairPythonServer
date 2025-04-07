@@ -56,6 +56,8 @@ Environment variables:
 - `ADMIN_SECRET`: Hasura admin secret for GraphQL API access
 - `USE_MOCK_DATA`: Set to "true" to use mock data instead of real API calls (default: "false")
 - `PORT`: Port for the web server (default: 8000, web mode only)
+- `JWT_SIGNING_KEY`: JWT secret for hivemind
+-  `MODE`: Mode of interaction with hive, terminal or web
 
 ## Usage
 
@@ -86,7 +88,6 @@ This will start a web server on port 8000 (or the port specified in the PORT env
   - Request body:
     ```json
     {
-      "user_id": "user123",
       "message": "Show me all open job positions",
       "session_id": "optional-session-id"
     }
