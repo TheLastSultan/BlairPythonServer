@@ -150,11 +150,12 @@ async def make_hasura_request(token: str, graphql_query: str, params: Dict[str, 
 
     # Determine headers based on mode of interaction
     if mode == "web":
-        if not token:
+      if not token:
             return {"error": "Token not found", "request_id": request_id}
-        headers = {
+      headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}"
+            "Authorization": f"Bearer {token}",
+            "x-hasura-role": "user"
         }
     else:
         if not admin_secret:
@@ -228,7 +229,7 @@ async def get_graphql_response(token: str, function_name: str, params: Dict[str,
 
     return result
 
-async def execute_function(session_id: str, token: str, function_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+async def execute_function(token: str, function_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a function call to the GraphQL backend or fallback to mock"""
     # Create a unique request ID for tracking
     request_id = str(uuid.uuid4())
@@ -246,7 +247,7 @@ async def execute_function(session_id: str, token: str, function_name: str, para
         # Call the GraphQL API or mock backend
         result = await get_graphql_response(token, function_name, params, use_mock)
     else:
-        result = await run_functions(session_id, token, function_name, params)
+        result = await run_functions(token, function_name, params)
     # Log the result
     print(f"[{datetime.now().isoformat()}] Response for request ID: {request_id}")
     print(f"Result: {json.dumps(result, indent=2)}")
@@ -254,7 +255,7 @@ async def execute_function(session_id: str, token: str, function_name: str, para
     return result
 
 
-async def create_pipeline(session_id: str, token: str, params: Dict[str, Any]) -> Dict[str, Any]:
+async def create_pipeline(token: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """
     Creates a pipeline and inserts the nodes into the database.
 
@@ -274,8 +275,7 @@ async def create_pipeline(session_id: str, token: str, params: Dict[str, Any]) -
         company_id = "c207a04f-dd58-44bb-a8bb-f4e7bf4dbb18"
     else:
         #get company_id from user_id
-        company = make_hasura_request(token, get_company_id, {"userId": session_id}, request_id)
-        print("company: ", company)
+        company = await make_hasura_request(token, get_company_id, {}, request_id)
         company_id = company['data']['User'][0]['company_id']
         
     # Build the pipeline object with the provided parameters
@@ -302,7 +302,7 @@ async def create_pipeline(session_id: str, token: str, params: Dict[str, Any]) -
         # if node.get("type") == "assessment":
         #     node["data"]["configs"]["assessment_id"] = "assessment_id"
 
-    data = get_graphql_response(session_id, "createPipeline", {"object": pipeline})
+    data = await get_graphql_response(token, "createPipeline", {"object": pipeline})
     pipeline_id = data.get('data', {}).get('insert_Pipeline_one', {}).get('id')
 
     # Prepare and insert nodes associated with the pipeline
@@ -316,7 +316,7 @@ async def create_pipeline(session_id: str, token: str, params: Dict[str, Any]) -
             }
             for node in pipeline["node_flow"]["nodes"]
         ]
-        make_hasura_request(session_id, insert_node_query, {"objects": pipeline_nodes}, request_id)
+        await make_hasura_request(token, insert_node_query, {"objects": pipeline_nodes}, request_id)
 
         return {"success": True}
     else:
@@ -327,6 +327,6 @@ async def create_pipeline(session_id: str, token: str, params: Dict[str, Any]) -
 def get_available_functions():
     return [item["function"] for item in ats_function_schema if "function" in item]
 
-async def run_functions(session_id: str, token: str, function_name, params):
+async def run_functions(token: str, function_name, params):
     if function_name == "createPipeline":
-        return await create_pipeline(session_id, token, params)
+        return await create_pipeline(token, params)

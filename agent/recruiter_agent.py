@@ -111,7 +111,7 @@ class RecruiterAgent:
     async def call_function(self, function_name: str, function_args: Dict[str, Any]) -> Dict[str, Any]:
         """Call a function and get the result asynchronously"""
         # Use asyncio to run the potentially blocking function in a thread pool
-        result = await execute_function(self.session_id, self.token, function_name, function_args)
+        result = await execute_function(self.token, function_name, function_args)
         return result
 
     async def process_message(self, user_message: str) -> str:
