@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.middleware import TokenVerificationMiddleware
 from functions.ats_functions import get_available_functions, execute_function
-from utils.cache import connect_redis, set_redis_data_with_ex, get_redis_data, delete_redis_data, set_redis_data
 
 # Load OpenAI API key from environment variable
 api_key = os.environ.get("OPENAI_API_KEY")
@@ -49,26 +48,16 @@ except Exception as e:
 console = Console()
 
 # Initialize FastAPI app
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup: connect to Redis
-    redis_client = await connect_redis()
-    if not redis_client:
-        raise Exception("Redis connection failed.")
-    app.state.redis_client = redis_client
-    yield
-    # Shutdown: close Redis connection
-    await app.state.redis_client.close()
-    
-app = FastAPI(title="AI Recruiter API", lifespan=lifespan)
+app = FastAPI(title="AI Recruiter API",)
 app.add_middleware(TokenVerificationMiddleware)
 
 # --- RecruiterAgent Class using Async Redis ---
 class RecruiterAgent:
-    def __init__(self, session_id: str, model: str = "gpt-4-turbo"):
+    def __init__(self, session_id: str, token: str = None, model: str = "gpt-4-turbo"):
         self.MODE = os.environ.get("MODE")
         self.model = model
         self.session_id = session_id
+        self.token = token
         self.functions = get_available_functions()
         
         # Initialize conversation history
@@ -83,6 +72,7 @@ class RecruiterAgent:
                 3. Setting up interview pipelines and assessments
                 4. Tracking candidate progress through hiring stages
                 5. Providing insights on hiring metrics
+                6. Creating job pipelines and managing candidate applications
 
                 You have access to the company's ATS through GraphQL API functions. Use these functions to help users
                 accomplish their recruitment tasks. Be proactive in suggesting relevant actions but make sure to
@@ -93,7 +83,22 @@ class RecruiterAgent:
                 - Explain any recommended actions clearly
                 - Format information in an easy-to-read manner
                 - Respect confidentiality of candidate information
-
+                - When users request for information that requires an input use the relevant function to provide a list of possible options of the input they can select from i.e when they request for top candidate with a pipeline, automatically use getRecentPipeline function to list possible pipelines in the same response
+                
+                When asked to create a pipeline:
+                    - Initiate Conversation and Gather Job Criteria:
+                    •	Always engage the user professionally, asking clarifying questions to gather missing job details if not fully provided in the initial message.
+                    •	Essential Fields to Collect:
+                    •	pipeline_name (Required)
+                    •	job_title (Required)
+                    •	skills (Required)
+                    •	Optional Fields to Collect:
+                    •	min_experience (Years)
+                    •	job_type
+                    •	location
+                    •	Ensure a conversational flow to dynamically capture missing information, adjusting language for clarity and professionalism.
+                    prompt them if they want to provide optional details
+                    
                 When you need to access the ATS system, use the available functions to fetch or update the necessary data.
                 """
             }
@@ -102,18 +107,17 @@ class RecruiterAgent:
     def add_message(self, role: str, content: str) -> None:
         """Add a message to the conversation history"""
         self.messages.append({"role": role, "content": content})
-        if self.MODE == "web":
-            await self._save_state()
 
     async def call_function(self, function_name: str, function_args: Dict[str, Any]) -> Dict[str, Any]:
         """Call a function and get the result asynchronously"""
-        result = await execute_function(self.session_id, function_name, function_args)
+        # Use asyncio to run the potentially blocking function in a thread pool
+        result = await execute_function(self.session_id, self.token, function_name, function_args)
         return result
 
     async def process_message(self, user_message: str) -> str:
         """Process a user message and return the assistant's response asynchronously"""
         # Add user message to conversation history
-        await self.add_message("user", user_message)
+        self.add_message("user", user_message)
         
         # Call the model with the updated conversation
         response = await client.chat.completions.create(
@@ -124,12 +128,12 @@ class RecruiterAgent:
         )
         
         assistant_message = response.choices[0].message
-        tool_calls = getattr(assistant_message, "tool_calls", [])
+        tool_calls = assistant_message.tool_calls
         
         # If the model wants to call a function
         if tool_calls:
             # Add the assistant's message with function calls to conversation
-            await self.add_message("assistant", assistant_message.content or "")
+            self.add_message("assistant", assistant_message.content or "")
             self.messages[-1]["tool_calls"] = [
                 {
                     "id": tool_call.id,
@@ -163,7 +167,6 @@ class RecruiterAgent:
                     "name": function_name,
                     "content": json.dumps(function_response)
                 })
-                await self._save_state()  # Save the updated state to Redis
             
             # Get a new response from the model with the function results
             second_response = await client.chat.completions.create(
@@ -172,12 +175,13 @@ class RecruiterAgent:
             )
             
             assistant_response = second_response.choices[0].message.content
-            await self.add_message("assistant", assistant_response)
+            self.add_message("assistant", assistant_response)
             return assistant_response
         
         # If no function call is needed, return the response
-        await self.add_message("assistant", assistant_message.content)
+        self.add_message("assistant", assistant_message.content)
         return assistant_message.content
+
 
 async def async_main(session_id: str):
     # Parse command line arguments
@@ -186,7 +190,7 @@ async def async_main(session_id: str):
     args = parser.parse_args()
     
     # Create the agent
-    agent = await RecruiterAgent.create(model=args.model, session_id=session_id)
+    agent = RecruiterAgent(session_id=session_id, model=args.model)
     
     # Print welcome message
     console.print(Panel.fit(
@@ -225,31 +229,34 @@ class MessageResponse(BaseModel):
     response: str
     session_id: str
 
+# Dictionary to store agent instances by session_id
+agent_sessions = {}
+
 # API endpoints
 @app.post("/", response_model=MessageResponse)
 async def process_message_endpoint(message: MessageRequest, req: Request):
     """Process a message from the user and return the assistant's response."""
     try:
-        # Determine session_id based on a middleware-verified token or request data.
-        if hasattr(req.state, "decoded_token") and req.state.decoded_token:
-            session_id = req.state.decoded_token.get("id")
-            key = f"session:{session_id}"
-            existing_session = await get_redis_data(key)
-            if not existing_session:
-                # Update Redis with the raw token from middleware (with expiration).
-                await set_redis_data_with_ex(key, req.state.token, 3600)
-        elif message.session_id:
+        # Determine session_id from the message or the middleware-verified token.
+        if message.session_id:
             session_id = message.session_id
+        elif hasattr(req.state, "decoded_token") and req.state.decoded_token:
+            session_id = req.state.decoded_token.get("id")
         else:
-            raise HTTPException(status_code=400, detail="session_id or token is required")
-
-        # Verify session exists
-        session = await get_redis_data(f"session:{session_id}")
-        if not session:
-            raise HTTPException(status_code=403, detail="Session not found or expired; pass token")
-
-        # Create a new RecruiterAgent instance using the async factory method.
-        agent = await RecruiterAgent.create(session_id=session_id)
+            # Neither session_id nor token provided.
+            raise HTTPException(status_code=404, detail="Session not found; pass token")
+        
+        # Create a new RecruiterAgent for this session if it does not exist.
+        # Only create an agent if the token is provided; otherwise, return 404.
+        if session_id not in agent_sessions:
+            if hasattr(req.state, "token") and req.state.token:
+                token = req.state.token
+                agent_sessions[session_id] = RecruiterAgent(session_id=session_id, token=token)
+            else:
+                raise HTTPException(status_code=404, detail="Session not found; pass token")
+        
+        # Retrieve the existing RecruiterAgent for this session.
+        agent = agent_sessions[session_id]
 
         # Process the user's message.
         response_text = await agent.process_message(message.message)
@@ -271,9 +278,6 @@ import signal
 import logging
 from rich.console import Console
 from dotenv import load_dotenv
-
-# Assume these functions are defined elsewhere:
-# async_main(session_id), connect_redis(), app (the FastAPI instance)
 
 load_dotenv()
 logger = logging.getLogger(__name__)
