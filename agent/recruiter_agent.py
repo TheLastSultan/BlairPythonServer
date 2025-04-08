@@ -70,101 +70,37 @@ class RecruiterAgent:
         self.model = model
         self.session_id = session_id
         self.functions = get_available_functions()
-        self.messages = []  # Will be populated via async load
+        
+        # Initialize conversation history
+        self.messages = [
+            {
+                "role": "system",
+                "content": """You are an AI recruiter assistant that helps hiring managers and recruiters manage 
+                their applicant tracking system. You can help with:
 
-    @classmethod
-    async def create(cls, session_id: str, model: str = "gpt-4-turbo"):
-        """
-        Asynchronous factory method that initializes a RecruiterAgent
-        and loads its conversation history from Redis.
-        """
-        agent = cls(session_id, model)
-        await agent._load_state()
-        return agent
+                1. Creating and managing job postings
+                2. Reviewing and managing candidates
+                3. Setting up interview pipelines and assessments
+                4. Tracking candidate progress through hiring stages
+                5. Providing insights on hiring metrics
 
-    async def _load_state(self) -> None:
-        """Load conversation history from Redis asynchronously."""
-        if self.MODE == "web":
-            key = f"recruiter_agent:{self.session_id}"
-            state = await get_redis_data(key)
-            if state:
-                try:
-                    data = json.loads(state)
-                    self.messages = data.get("messages", [])
-                except Exception as e:
-                    logger.error("Error loading state from Redis: %s", e)
-                self.messages = []
-            else:
-                # Initialize conversation history with a system message for web.
-                self.messages = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are an AI recruiter assistant that helps hiring managers and recruiters manage "
-                            "their applicant tracking system. You can help with:\n\n"
-                            "1. Creating and managing job postings\n"
-                            "2. Reviewing and managing candidates\n"
-                            "3. Setting up interview pipelines and assessments\n"
-                            "4. Tracking candidate progress through hiring stages\n"
-                            "5. Providing insights on hiring metrics\n"
-                            "6. Creating job pipelines and managing candidate applications\n\n"
-                            "You have access to the company's ATS through GraphQL API functions. Use these functions to help users "
-                            "accomplish their recruitment tasks. Be proactive in suggesting relevant actions but make sure to "
-                            "understand the user's needs first.\n\n"
-                            "When responding to the user:\n"
-                            "- Be professional, helpful, and concise\n"
-                            "- Explain any recommended actions clearly\n"
-                            "- Format information in an easy-to-read manner\n"
-                            "- Respect confidentiality of candidate information\n"
-                            "- When users request information that requires input, use the relevant function to provide a list "
-                            "of options they can select from.\n\n"
-                            "When asked to create a pipeline:\n"
-                            "- Initiate conversation and gather job criteria, prompting for required and optional details.\n\n"
-                            "When you need to access the ATS system, use the available functions to fetch or update the necessary data."
-                        )
-                    }
-                ]
-                await self._save_state()
-        else:
-            # Initialize conversation history with a system message for CLI
-            if not self.messages:
-                self.messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an AI recruiter assistant that helps hiring managers and recruiters manage "
-                        "their applicant tracking system. You can help with:\n\n"
-                        "1. Creating and managing job postings\n"
-                        "2. Reviewing and managing candidates\n"
-                        "3. Setting up interview pipelines and assessments\n"
-                        "4. Tracking candidate progress through hiring stages\n"
-                        "5. Providing insights on hiring metrics\n"
-                        "6. Creating job pipelines and managing candidate applications\n\n"
-                        "You have access to the company's ATS through GraphQL API functions. Use these functions to help users "
-                        "accomplish their recruitment tasks. Be proactive in suggesting relevant actions but make sure to "
-                        "understand the user's needs first.\n\n"
-                        "When responding to the user:\n"
-                        "- Be professional, helpful, and concise\n"
-                        "- Explain any recommended actions clearly\n"
-                        "- Format information in an easy-to-read manner\n"
-                        "- Respect confidentiality of candidate information\n"
-                        "- When users request information that requires input, use the relevant function to provide a list "
-                        "of options they can select from.\n\n"
-                        "When asked to create a pipeline:\n"
-                        "- Initiate conversation and gather job criteria, prompting for required and optional details.\n\n"
-                        "When you need to access the ATS system, use the available functions to fetch or update the necessary data."
-                    )
-                }
-            ]
+                You have access to the company's ATS through GraphQL API functions. Use these functions to help users
+                accomplish their recruitment tasks. Be proactive in suggesting relevant actions but make sure to
+                understand the user's needs first.
 
-    async def _save_state(self) -> None:
-        """Save the current conversation state to Redis asynchronously."""
-        key = f"recruiter_agent:{self.session_id}"
-        data = {"messages": self.messages}
-        await set_redis_data(key, json.dumps(data))
+                When responding to the user:
+                - Be professional, helpful, and concise
+                - Explain any recommended actions clearly
+                - Format information in an easy-to-read manner
+                - Respect confidentiality of candidate information
 
-    async def add_message(self, role: str, content: str) -> None:
-        """Add a message to the conversation history and save state asynchronously."""
+                When you need to access the ATS system, use the available functions to fetch or update the necessary data.
+                """
+            }
+        ]
+
+    def add_message(self, role: str, content: str) -> None:
+        """Add a message to the conversation history"""
         self.messages.append({"role": role, "content": content})
         if self.MODE == "web":
             await self._save_state()

@@ -6,17 +6,12 @@ import uuid
 from datetime import datetime
 import logging
 import dotenv
-from typing import Dict, List, Any, Optional, Union
-from functions.custom_pipeline import custom_pipeline
-from functions.ats_schema import ats_function_schema, insert_node_query, get_company_id
-from utils.cache import get_redis_data
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
 
 # Setup logging
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Load OpenAI API key from environment variable
@@ -31,8 +26,113 @@ except Exception as e:
     logger.error(f"Failed to initialize OpenAI client: {str(e)}")
     client = None
 
-graphql_functions = ["getCandidateByName", "getCandidateByEmail", "getPipelineById",
-                     "getRecentPipeline", "getTopCandidates", "getRecentlyFinishedCandidates"]
+# Function definitions as a list of dictionaries to be passed to OpenAI API
+ats_function_schema = [
+    {
+  "function": {
+    "name": "getRecentPipeline",
+    "description": "Get a list of pipelines sorted by their recently used. Typically this will be used as a precursor function.",
+  },
+  "graphQL": "query GetPipelines{ Pipeline(order_by: {updated_at: desc}, limit: 10) { id name updated_at } }"
+},
+{
+  "function": {
+    "name": "getRecentlyFinishedCandidates",
+    "description": "Get the most recently finished candidates in a specified pipeline.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pipeline_id": {
+          "type": "string",
+          "description": "The ID of the pipeline to query for finished candidates."
+        }
+      },
+      "required": ["pipeline_id"]
+    }
+  },
+  "graphQL": "query GetRecentlyFinishedCandidates($pipeline_id: uuid!, $limit: Int, $offset: Int) { Pipeline_by_pk(id: $pipeline_id) { Candidates(order_by: {created_at: desc}, limit:$limit, offset:$offset){ id name email created_at status resume_url total_score } } }"
+},
+{
+  "function": {
+    "name": "getTopCandidates",
+    "description": "Get the top candidates in a specified pipeline, ordered by total score.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "pipeline_id": {
+          "type": "string",
+          "description": "The ID of the pipeline to query for top candidates."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "The maximum number of candidates to retrieve.",
+          "default": 10
+        },
+        "offset": {
+          "type": "integer",
+          "description": "The number of candidates to skip before starting to collect the results.",
+          "default": 0
+        }
+      },
+      "required": ["pipeline_id"]
+    }
+  },
+  "graphQL": "query GetTopCandidates($pipeline_id: uuid!, $limit: Int = 10, $offset: Int = 0) { Pipeline_by_pk(id: $pipeline_id) { Candidates(order_by: {total_score: desc}, limit:$limit, offset:$offset){ id name email created_at status resume_url total_score } } }"
+},
+{
+  "function": {
+    "name": "getCandidateByEmail",
+    "description": "Retrieve candidate details using their email address.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Email of the candidate to retrieve details for."
+        }
+      },
+      "required": ["email"]
+    }
+  },
+  "graphQL": "query GetCandidateByEmail($email: String!) { Candidate(where: {email: {_eq: $email}}) { id name email pipeline_id total_score status resume_url} }"
+  
+},
+{
+  "function": {
+    "name": "getCandidateByName",
+    "description": "Retrieve candidate details using a case-insensitive includes, such as matching a first name.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Match the candidate's name, case-insensitive."
+        }
+      },
+      "required": ["name"]
+    }
+  },
+  "graphQL": "query GetCandidateByName($name: String!) { Candidate(where: {name: {_iregex: $name}}) { id name email pipeline_id total_score status resume_url } }"
+},
+{
+  "function": {
+    "name": "getCandidateScoresDetail",
+    "description": "Retrieve detailed score information for a candidate using their email address.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Email of the candidate to retrieve score details for."
+        }
+      },
+      "required": ["email"]
+    }
+  },
+  "graphQL": "query GetCandidateScoresDetail($email: String!) { Candidate(where: {email: {_eq: $email}}) { id name email application_metadata total_score NodeResponses { score result } } }"
+}
+]
+
 
 # Mock backend implementation - this simulates the GraphQL backend
 def mock_graphql_response(function_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -65,8 +165,7 @@ def mock_graphql_response(function_name: str, params: Dict[str, Any]) -> Dict[st
         result_text = response.choices[0].message.content
         # Clean up the response to extract only the JSON part
         if "```json" in result_text:
-            result_text = result_text.split(
-                "```json")[1].split("```")[0].strip()
+            result_text = result_text.split("```json")[1].split("```")[0].strip()
         elif "```" in result_text:
             result_text = result_text.split("```")[1].split("```")[0].strip()
 
@@ -80,51 +179,31 @@ def mock_graphql_response(function_name: str, params: Dict[str, Any]) -> Dict[st
         }
 
 
-def generate_job_description(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate job description for pipeline creation using ChatGPT"""
-    # Prepare a prompt for ChatGPT to generate mock data
-    prompt = f"""
-        Generate a detailed job description based on the user's preferences (see 'Parameters' below). 
-        - Integrate all necessary skills and requirements directly into the description.
-        - Emphasize how this role will evaluate a candidate's qualifications (e.g., matching against their resume).
-        - Omit any instructions about applying or references to the company.
-        - The output must be valid JSON, containing only one field: "job_description".
-
-        Parameters:
-        {json.dumps(params, indent=2)}
-
-        Example of valid response:
-        {{
-        "job_description": "AI-generated descriptive text goes here."
-        }}
-        """
-
-    # Call ChatGPT to generate mock data
-    response = client.chat.completions.create(
-        model="gpt-4-turbo",  # or whatever model is available to you
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a helpful assistant that generates job descriptions based on user parameters",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.7,
-    )
-
-    # Extract the generated JSON from the response
-    try:
-        result_text = response.choices[0].message.content
-        # Clean up the response to extract only the JSON part
-        if "```json" in result_text:
-            result_text = result_text.split(
-                "```json")[1].split("```")[0].strip()
-        elif "```" in result_text:
-            result_text = result_text.split("```")[1].split("```")[0].strip()
-
-        result = json.loads(result_text)
-        return result
-    except Exception as e:
+# Function to query Hasura GraphQL API
+def get_graphql_response(function_name: str, params: Dict[str, Any], use_mock: bool = False) -> Dict[str, Any]:
+    """
+    Query the Hasura GraphQL API with the GraphQL query associated with the function.
+    Falls back to mock data if the API call fails or use_mock is True.
+    
+    Args:
+        function_name: Name of the function/operation to execute
+        params: Parameters for the GraphQL operation
+        use_mock: If True, skips the real API call and uses mock data
+        
+    Returns:
+        Dict containing the GraphQL API response
+    """
+    # Create a unique request ID for tracking
+    request_id = str(uuid.uuid4())
+    logger = logging.getLogger('graphql')
+    
+    # Find the function definition in schema
+    function_def = next((item for item in ats_function_schema if 
+                         "function" in item and 
+                         item["function"]["name"] == function_name), None)
+    
+    if function_def is None or "graphQL" not in function_def:
+        logger.error(f"Function {function_name} not found in schema or missing GraphQL query")
         return {
             "error": f"Failed to generate description: {str(e)}",
             "params": params,
@@ -172,11 +251,12 @@ async def make_hasura_request(session_id: str, graphql_query: str, params: Dict[
         "query": graphql_query,
         "variables": params
     }
-
+    
     # Log the request
+    logger.info(f"GraphQL request for {function_name} (Request ID: {request_id})")
     logger.debug(f"Query: {graphql_query}")
     logger.debug(f"Variables: {json.dumps(params, indent=2)}")
-
+    
     try:
         async with httpx.AsyncClient(timeout=10) as request_client:
             response = await request_client.post(hasura_endpoint, headers=headers, json=payload)
