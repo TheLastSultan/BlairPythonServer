@@ -1,5 +1,7 @@
 import os
 import sys
+import jwt
+import uuid
 import json
 import openai
 import asyncio
@@ -7,6 +9,7 @@ from typing import Dict, List, Any, Optional, Union
 import argparse
 import logging
 import dotenv
+from contextlib import asynccontextmanager
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -24,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Add parent directory to path to import functions
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.middleware import TokenVerificationMiddleware
 from functions.ats_functions import get_available_functions, execute_function
 
 # Load OpenAI API key from environment variable
@@ -44,11 +48,16 @@ except Exception as e:
 console = Console()
 
 # Initialize FastAPI app
-app = FastAPI(title="AI Recruiter API")
+app = FastAPI(title="AI Recruiter API",)
+app.add_middleware(TokenVerificationMiddleware)
 
+# --- RecruiterAgent Class using Async Redis ---
 class RecruiterAgent:
-    def __init__(self, model="gpt-4-turbo"):
+    def __init__(self, session_id: str, token: str = None, model: str = "gpt-4-turbo"):
+        self.MODE = os.environ.get("MODE")
         self.model = model
+        self.session_id = session_id
+        self.token = token
         self.functions = get_available_functions()
         
         # Initialize conversation history
@@ -63,6 +72,7 @@ class RecruiterAgent:
                 3. Setting up interview pipelines and assessments
                 4. Tracking candidate progress through hiring stages
                 5. Providing insights on hiring metrics
+                6. Creating job pipelines and managing candidate applications
 
                 You have access to the company's ATS through GraphQL API functions. Use these functions to help users
                 accomplish their recruitment tasks. Be proactive in suggesting relevant actions but make sure to
@@ -73,7 +83,22 @@ class RecruiterAgent:
                 - Explain any recommended actions clearly
                 - Format information in an easy-to-read manner
                 - Respect confidentiality of candidate information
-
+                - When users request for information that requires an input use the relevant function to provide a list of possible options of the input they can select from i.e when they request for top candidate with a pipeline, automatically use getRecentPipeline function to list possible pipelines in the same response
+                
+                When asked to create a pipeline:
+                    - Initiate Conversation and Gather Job Criteria:
+                    •	Always engage the user professionally, asking clarifying questions to gather missing job details if not fully provided in the initial message.
+                    •	Essential Fields to Collect:
+                    •	pipeline_name (Required)
+                    •	job_title (Required)
+                    •	skills (Required)
+                    •	Optional Fields to Collect:
+                    •	min_experience (Years)
+                    •	job_type
+                    •	location
+                    •	Ensure a conversational flow to dynamically capture missing information, adjusting language for clarity and professionalism.
+                    prompt them if they want to provide optional details
+                    
                 When you need to access the ATS system, use the available functions to fetch or update the necessary data.
                 """
             }
@@ -86,7 +111,7 @@ class RecruiterAgent:
     async def call_function(self, function_name: str, function_args: Dict[str, Any]) -> Dict[str, Any]:
         """Call a function and get the result asynchronously"""
         # Use asyncio to run the potentially blocking function in a thread pool
-        result = await asyncio.to_thread(execute_function, function_name, function_args)
+        result = await execute_function(self.token, function_name, function_args)
         return result
 
     async def process_message(self, user_message: str) -> str:
@@ -157,14 +182,15 @@ class RecruiterAgent:
         self.add_message("assistant", assistant_message.content)
         return assistant_message.content
 
-async def async_main():
+
+async def async_main(session_id: str):
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='AI Recruiter Agent CLI')
     parser.add_argument('--model', type=str, default='gpt-4-turbo', help='OpenAI model to use')
     args = parser.parse_args()
     
     # Create the agent
-    agent = RecruiterAgent(model=args.model)
+    agent = RecruiterAgent(session_id=session_id, model=args.model)
     
     # Print welcome message
     console.print(Panel.fit(
@@ -195,7 +221,7 @@ async def async_main():
 
 # Pydantic models for API requests and responses
 class MessageRequest(BaseModel):
-    user_id: str
+    # user_id: str
     message: str
     session_id: Optional[str] = None
 
@@ -208,47 +234,75 @@ agent_sessions = {}
 
 # API endpoints
 @app.post("/", response_model=MessageResponse)
-async def process_message(request: MessageRequest):
-    """Process a message from the user and return the assistant's response"""
+async def process_message_endpoint(message: MessageRequest, req: Request):
+    """Process a message from the user and return the assistant's response."""
     try:
-        # Get or create an agent for this session
-        session_id = request.session_id or request.user_id
-        if session_id not in agent_sessions:
-            agent_sessions[session_id] = RecruiterAgent()
-            
-        # Process the message
-        agent = agent_sessions[session_id]
-        response = await agent.process_message(request.message)
+        # Determine session_id from the message or the middleware-verified token.
+        if message.session_id:
+            session_id = message.session_id
+        elif hasattr(req.state, "decoded_token") and req.state.decoded_token:
+            session_id = req.state.decoded_token.get("id")
+        else:
+            # Neither session_id nor token provided.
+            raise HTTPException(status_code=404, detail="Session not found; pass token")
         
+        # Create a new RecruiterAgent for this session if it does not exist.
+        # Only create an agent if the token is provided; otherwise, return 404.
+        if session_id not in agent_sessions:
+            if hasattr(req.state, "token") and req.state.token:
+                token = req.state.token
+                agent_sessions[session_id] = RecruiterAgent(session_id=session_id, token=token)
+            else:
+                raise HTTPException(status_code=404, detail="Session not found; pass token")
+        
+        # Retrieve the existing RecruiterAgent for this session.
+        agent = agent_sessions[session_id]
+
+        # Process the user's message.
+        response_text = await agent.process_message(message.message)
+
         return MessageResponse(
-            response=response,
+            response=response_text,
             session_id=session_id
         )
     except Exception as e:
-        logger.error(f"Error processing message: {str(e)}")
+        logger.error("Error processing message: %s", str(e))
         raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
+
+
+import os
+import sys
+import uuid
+import asyncio
+import signal
+import logging
+from rich.console import Console
+from dotenv import load_dotenv
+
+load_dotenv()
+logger = logging.getLogger(__name__)
+console = Console()
 
 def main():
     """Entry point for the application"""
+    session_id = str(uuid.uuid4())
     try:
-        # Check if CLI mode or web server mode
         if len(sys.argv) > 1 and sys.argv[1] == "--web":
-            # Start the FastAPI server with uvicorn
+            # Web mode: start the FastAPI server with uvicorn
             import uvicorn
             port = int(os.environ.get("PORT", 8000))
             host = os.environ.get("HOST", "0.0.0.0")
             console.print(f"Starting web server on {host}:{port}...")
             uvicorn.run(app, host=host, port=port)
         else:
-            # Run the async main function in CLI mode
-            asyncio.run(async_main())
+            # CLI mode: run the async main function using asyncio.run()
+            asyncio.run(async_main(session_id))
     except KeyboardInterrupt:
-        # Handle Ctrl+C gracefully
         console.print("\n\n[bold]Program interrupted. Exiting...[/bold]")
     except Exception as e:
-        # Handle any unexpected errors
         logger.error(f"Unexpected error: {str(e)}")
         console.print(f"\n\n[bold red]Error: {str(e)}[/bold red]")
 
 if __name__ == "__main__":
     main()
+    
