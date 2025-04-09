@@ -1,6 +1,5 @@
 import os
 import sys
-import jwt
 import uuid
 import json
 import openai
@@ -9,13 +8,11 @@ from typing import Dict, List, Any, Optional, Union
 import argparse
 import logging
 import dotenv
-from contextlib import asynccontextmanager
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # Load environment variables from .env file
@@ -51,7 +48,6 @@ console = Console()
 app = FastAPI(title="AI Recruiter API",)
 app.add_middleware(TokenVerificationMiddleware)
 
-# --- RecruiterAgent Class using Async Redis ---
 class RecruiterAgent:
     def __init__(self, session_id: str, token: str = None, model: str = "gpt-4-turbo"):
         self.MODE = os.environ.get("MODE")
@@ -181,7 +177,6 @@ class RecruiterAgent:
         # If no function call is needed, return the response
         self.add_message("assistant", assistant_message.content)
         return assistant_message.content
-
 
 async def async_main(session_id: str):
     # Parse command line arguments
