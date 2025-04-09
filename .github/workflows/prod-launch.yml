@@ -1,0 +1,22 @@
+name: Hive Prod Image Push
+
+on:
+  workflow_dispatch:
+
+env:
+  AWS_ACCESS_KEY_ID: "${{ secrets.AWS_ACCESS_KEY_ID }}"
+  AWS_SECRET_ACCESS_KEY: "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+  AWS_DEFAULT_REGION: us-west-2
+  COMPOSE_PROFILES: prod
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Checkout
+        uses: actions/checkout@v3
+      - name: Setup just
+        uses: extractions/setup-just@v1
+      - name: AWS Environment Redeploy
+        run: just deploy-beanstalk
