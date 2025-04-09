@@ -23,11 +23,6 @@ def _process(old_compose: dict) -> dict:
             del service['build']
         if 'restart' in service:
             del service['restart']
-        if 'profiles' in service:
-            if 'prod' not in service['profiles']:
-                del new_compose['services'][service_name]
-            else:
-                del new_compose['services'][service_name]['profiles']
     return new_compose
 
 

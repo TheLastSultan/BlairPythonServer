@@ -1,0 +1,1 @@
+./beanstalk/.platform/confighooks/prebuild/02env.sh
