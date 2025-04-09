@@ -4,7 +4,7 @@ services:
     image: 687253468904.dkr.ecr.us-west-2.amazonaws.com/hive
     env_file: .env
     ports:
-      - "8000:8000"
+      - "80:8000"
     environment:
       ENV: ${ENV}
       MODE: ${MODE}

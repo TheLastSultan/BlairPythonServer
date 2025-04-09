@@ -17,4 +17,4 @@ COPY . .
 EXPOSE 8000
 
 # Run the application using Uvicorn. Adjust "main:app" if your FastAPI app is named differently.
-CMD ["uvicorn", "agent.recruiter_agent:app", "--host", "0.0.0.0", "--port", "80"]
+CMD ["uvicorn", "agent.recruiter_agent:app", "--host", "0.0.0.0", "--port", "8000"]
