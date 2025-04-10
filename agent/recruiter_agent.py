@@ -219,10 +219,9 @@ class MessageRequest(BaseModel):
     # user_id: str
     message: str
     session_id: Optional[str] = None
-
 class MessageResponse(BaseModel):
     response: str
-    session_id: str
+    session_id: Optional[str] = None
 
 # Dictionary to store agent instances by session_id
 agent_sessions = {}
@@ -264,6 +263,11 @@ async def process_message_endpoint(message: MessageRequest, req: Request):
         logger.error("Error processing message: %s", str(e))
         raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
 
+@app.get("/health", response_model=MessageResponse)
+def health_check():
+    """Health check endpoint"""
+    return MessageResponse(response="Hive is Alive")
+    
 
 import os
 import sys
