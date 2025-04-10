@@ -2,6 +2,7 @@ import os
 import sys
 import uuid
 import json
+from fastapi.responses import JSONResponse
 import openai
 import asyncio
 from typing import Dict, List, Any, Optional, Union
@@ -263,6 +264,26 @@ async def process_message_endpoint(message: MessageRequest, req: Request):
         logger.error("Error processing message: %s", str(e))
         raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
 
+@app.post("/reset/{session_id}")
+async def reset_session(session_id: str):
+    """Reset the session by removing it from the active sessions."""
+    try:
+        print(session_id)
+        # Check if the session exists
+        if session_id in agent_sessions:
+            # Remove the session
+            del agent_sessions[session_id]
+            return JSONResponse(
+                content={"message": "Session successfully reset."},
+                status_code=200
+            )
+        else:
+            # If the session doesn't exist
+            raise HTTPException(status_code=404, detail="Session not found.")
+    except Exception as e:
+        logger.error("Error resetting session: %s", str(e))
+        raise HTTPException(status_code=500, detail=f"Error resetting session: {str(e)}")
+    
 @app.get("/health", response_model=MessageResponse)
 def health_check():
     """Health check endpoint"""
