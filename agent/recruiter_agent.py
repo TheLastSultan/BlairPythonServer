@@ -3,6 +3,7 @@ import sys
 import uuid
 import json
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import openai
 import asyncio
 from typing import Dict, List, Any, Optional, Union
@@ -47,6 +48,15 @@ console = Console()
 
 # Initialize FastAPI app
 app = FastAPI(title="AI Recruiter API",)
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],       # or specify a list of allowed domains instead of ["*"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.add_middleware(TokenVerificationMiddleware)
 
 class RecruiterAgent:
@@ -268,7 +278,6 @@ async def process_message_endpoint(message: MessageRequest, req: Request):
 async def reset_session(session_id: str):
     """Reset the session by removing it from the active sessions."""
     try:
-        print(session_id)
         # Check if the session exists
         if session_id in agent_sessions:
             # Remove the session
