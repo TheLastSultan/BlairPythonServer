@@ -318,7 +318,7 @@ async def create_pipeline(token: str, params: Dict[str, Any]) -> Dict[str, Any]:
         ]
         await make_hasura_request(token, insert_node_query, {"objects": pipeline_nodes}, request_id)
 
-        return {"success": True}
+        return {"success": True, pipeline_id: pipeline_id}
     else:
         logging.error("Pipeline ID not found in the response")
         return {"error": "Unable to create pipeline at this time"}

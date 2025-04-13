@@ -105,6 +105,7 @@ class RecruiterAgent:
                     •	location
                     •	Ensure a conversational flow to dynamically capture missing information, adjusting language for clarity and professionalism.
                     prompt them if they want to provide optional details
+                    •	Add the pipeline link to the response message for easy access. i.e https://gethivemind.ai/pipeline/{{pipeline_id}}. pipeline_id will be return after successful creation of the pipeline
                     
                 When you need to access the ATS system, use the available functions to fetch or update the necessary data.
                 """
