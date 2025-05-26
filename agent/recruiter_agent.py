@@ -57,6 +57,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class MessageResponse(BaseModel):
+    response: str
+    session_id: Optional[str] = None
+    
+@app.get("/health", response_model=MessageResponse)
+def health_check():
+    """Health check endpoint"""
+    return MessageResponse(response="Hive is Alive")
+
 app.add_middleware(TokenVerificationMiddleware)
 
 class RecruiterAgent:
@@ -230,9 +239,6 @@ async def async_main(session_id: str):
 class MessageRequest(BaseModel):
     # user_id: str
     message: str
-    session_id: Optional[str] = None
-class MessageResponse(BaseModel):
-    response: str
     session_id: Optional[str] = None
 
 # Dictionary to store agent instances by session_id
