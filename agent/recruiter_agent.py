@@ -69,12 +69,20 @@ def health_check():
 app.add_middleware(TokenVerificationMiddleware)
 
 class RecruiterAgent:
-    def __init__(self, session_id: str, token: str = None, model: str = "gpt-4-turbo"):
+    """
+    AI Recruiter assistant that talks to OpenAI, calls ATS functions and
+    keeps a conversation history that is safe in a concurrent environment.
+    """
+    MAX_TOOL_ROUNDS = 5
+    
+    def __init__(self, session_id: str, token: str | None = None, model: str = "gpt-4o-mini", functions: List[Dict[str, Any]] | None = None):
         self.MODE = os.environ.get("MODE")
         self.model = model
         self.session_id = session_id
         self.token = token
-        self.functions = get_available_functions()
+        self.functions = functions or get_available_functions()
+        self._lock = asyncio.Lock()
+        self._client = openai.AsyncClient()
         
         # Initialize conversation history
         self.messages = [
@@ -120,84 +128,107 @@ class RecruiterAgent:
                 """
             }
         ]
-
-    def add_message(self, role: str, content: str) -> None:
-        """Add a message to the conversation history"""
-        self.messages.append({"role": role, "content": content})
-
-    async def call_function(self, function_name: str, function_args: Dict[str, Any]) -> Dict[str, Any]:
-        """Call a function and get the result asynchronously"""
-        # Use asyncio to run the potentially blocking function in a thread pool
-        result = await execute_function(self.token, function_name, function_args)
+    
+    async def _append(self, role: str, **kwargs):
+        """
+        Thread-safe append to the conversation history.
+        """
+        async with self._lock:
+            entry = {"role": role, **kwargs}
+            self.messages.append(entry)
+            return entry
+    
+    async def _call_tool(self, name: str, args: Dict[str, Any]) -> Any:
+        """Run one ATS function (wrapper around your execute_function)."""
+        logger.debug(f"Calling tool {name} with args={args}")
+        result = await execute_function(self.token, name, args)
+        logger.debug(f"Tool {name} returned: {result}")
         return result
+
+    async def reset(self):
+        """Clear the conversation except for the system prompt."""
+        async with self._lock:
+            self.messages = self.messages[:1]
 
     async def process_message(self, user_message: str) -> str:
         """Process a user message and return the assistant's response asynchronously"""
         # Add user message to conversation history
-        self.add_message("user", user_message)
+        await self._append("user", content=user_message)
         
-        # Call the model with the updated conversation
-        response = await client.chat.completions.create(
-            model=self.model,
-            messages=self.messages,
-            tools=[{"type": "function", "function": f} for f in self.functions],
-            tool_choice="auto"
-        )
-        
-        assistant_message = response.choices[0].message
-        tool_calls = assistant_message.tool_calls
-        
-        # If the model wants to call a function
-        if tool_calls:
-            # Add the assistant's message with function calls to conversation
-            self.add_message("assistant", assistant_message.content or "")
-            self.messages[-1]["tool_calls"] = [
-                {
-                    "id": tool_call.id,
-                    "type": "function",
-                    "function": {
-                        "name": tool_call.function.name,
-                        "arguments": tool_call.function.arguments
-                    }
-                }
-                for tool_call in tool_calls
-            ]
-            
-            # Process function calls concurrently
-            function_tasks = []
-            for tool_call in tool_calls:
-                function_name = tool_call.function.name
-                function_args = json.loads(tool_call.function.arguments)
-                
-                # Create a task for this function call
-                task = asyncio.create_task(self.call_function(function_name, function_args))
-                function_tasks.append((tool_call.id, function_name, task))
-            
-            # Process all function responses and add them to the conversation
-            for tool_call_id, function_name, task in function_tasks:
-                function_response = await task
-                
-                # Add the function response to conversation
-                self.messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "name": function_name,
-                    "content": json.dumps(function_response)
-                })
-            
-            # Get a new response from the model with the function results
-            second_response = await client.chat.completions.create(
-                model=self.model,
-                messages=self.messages
+        tool_round = 0
+        while True:
+            try:
+                response = await self._client.chat.completions.create(
+                    model=self.model,
+                    messages=self.messages,
+                    tools=[{"type": "function", "function": f}
+                           for f in self.functions],
+                    tool_choice="auto",
+                )
+            except openai.OpenAIError as api_err:
+                # *If* this is the "tool_calls without tool messages" error
+                if ("tool_calls" in str(api_err) and
+                        "did not have response messages" in str(api_err)):
+                    logger.error("Conversation out of sync; resetting session %s",
+                                 self.session_id)
+                    await self.reset()
+                    return ("Sorry, something went wrong on my end and "
+                            "I had to reset the conversation. "
+                            "Could you please try that again?")
+                raise  # let your FastAPI handler convert to 500
+
+            assistant_msg = response.choices[0].message
+            tool_calls = assistant_msg.tool_calls or []
+
+            # save the assistant message
+            assistant_entry = await self._append(
+                "assistant", content=assistant_msg.content or ""
             )
             
-            assistant_response = second_response.choices[0].message.content
-            self.add_message("assistant", assistant_response)
-            return assistant_response
-        
-        # If no function call is needed, return the response
-        self.add_message("assistant", assistant_message.content)
-        return assistant_message.content
+            if tool_calls:
+                assistant_entry["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in tool_calls
+                ]
+
+                # ----- run tools concurrently ------------------------------------
+                tasks = [
+                    asyncio.create_task(
+                        self._call_tool(
+                            tc.function.name, json.loads(tc.function.arguments)
+                        )
+                    )
+                    for tc in tool_calls
+                ]
+
+                # collect results **in order** so messages stay aligned
+                for tc, task in zip(tool_calls, tasks):
+                    result = await task
+                    await self._append(
+                        "tool",
+                        tool_call_id=tc.id,
+                        name=tc.function.name,
+                        content=json.dumps(result),
+                    )
+
+                tool_round += 1
+                if tool_round >= self.MAX_TOOL_ROUNDS:
+                    logger.warning("Too many tool rounds; aborting session %s",
+                                   self.session_id)
+                    await self.reset()
+                    return ("I wasn’t able to complete that request after "
+                            "several attempts. Let’s start over.")
+                # loop again – assistant might want further tools
+                continue
+
+            return assistant_msg.content
 
 async def async_main(session_id: str):
     # Parse command line arguments

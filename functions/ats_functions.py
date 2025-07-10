@@ -34,6 +34,8 @@ graphql_functions = ["getCandidateByName", "getCandidateByEmail", "getPipelineBy
                      "getRecentPipeline", "getTopCandidates", "getRecentlyFinishedCandidates"]
 
 # Mock backend implementation - this simulates the GraphQL backend
+
+
 def mock_graphql_response(function_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """Generate a mock response for a function call using ChatGPT"""
     # Prepare a prompt for ChatGPT to generate mock data
@@ -100,7 +102,7 @@ def generate_job_description(params: Dict[str, Any]) -> Dict[str, Any]:
 
     # Call ChatGPT to generate mock data
     response = client.chat.completions.create(
-        model="gpt-4-turbo",  # or whatever model is available to you
+        model="gpt-4o-mini",
         messages=[
             {
                 "role": "system",
@@ -150,9 +152,9 @@ async def make_hasura_request(token: str, graphql_query: str, params: Dict[str, 
 
     # Determine headers based on mode of interaction
     if mode == "web":
-      if not token:
+        if not token:
             return {"error": "Token not found", "request_id": request_id}
-      headers = {
+        headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {token}",
             "x-hasura-role": "user"
@@ -185,6 +187,7 @@ async def make_hasura_request(token: str, graphql_query: str, params: Dict[str, 
     except httpx.RequestError as e:
         logger.error(f"GraphQL request failed: {str(e)}")
         return {"error": str(e), "request_id": request_id}
+
 
 async def get_graphql_response(token: str, function_name: str, params: Dict[str, Any], use_mock: bool = False) -> Dict[str, Any]:
     """
@@ -229,30 +232,35 @@ async def get_graphql_response(token: str, function_name: str, params: Dict[str,
 
     return result
 
-async def execute_function(token: str, function_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute a function call to the GraphQL backend or fallback to mock"""
-    # Create a unique request ID for tracking
+
+async def execute_function(token: str,
+                           function_name: str,
+                           params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Call an ATS GraphQL function or Python fallback.
+    Always return a *serializable* dict – even when an exception occurs.
+    """
     request_id = str(uuid.uuid4())
+    ts = datetime.now().isoformat(timespec="seconds")
+    logging.info(f"{ts} Function call: {function_name} (request_id={request_id})  params={params}")
 
-    # Log the function call
-    print(
-        f"[{datetime.now().isoformat()}] Function call: {function_name}, Request ID: {request_id}"
-    )
-    print(f"Parameters: {json.dumps(params, indent=2)}")
+    use_mock = (os.environ.get("USE_MOCK_DATA", "false").lower() == "true")
+    try:
+        if function_name in graphql_functions:
+            result = await get_graphql_response(token, function_name,
+                                                params, use_mock)
+        else:
+            result = await run_functions(token, function_name, params)
 
-    # Use environment variable to determine if we should use mock data
-    use_mock = os.environ.get("USE_MOCK_DATA", "false").lower() == "true"
+        logging.info(f" Function result (request_id={request_id}): {result}")
+        # Make sure we always return something JSON-serialisable
+        return result if result is not None else {"error": "Function returned null"}
 
-    if function_name in graphql_functions:
-        # Call the GraphQL API or mock backend
-        result = await get_graphql_response(token, function_name, params, use_mock)
-    else:
-        result = await run_functions(token, function_name, params)
-    # Log the result
-    print(f"[{datetime.now().isoformat()}] Response for request ID: {request_id}")
-    print(f"Result: {json.dumps(result, indent=2)}")
-
-    return result
+    except Exception as exc:
+        # Capture the stack in logs but pass a clean message to the LLM
+        logging.exception("Function %s failed (request_id=%s)", function_name,
+                          request_id)
+        return {"error": str(exc), "request_id": request_id}
 
 
 async def create_pipeline(token: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -274,10 +282,10 @@ async def create_pipeline(token: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if mode != "web":
         company_id = "c207a04f-dd58-44bb-a8bb-f4e7bf4dbb18"
     else:
-        #get company_id from user_id
+        # get company_id from user_id
         company = await make_hasura_request(token, get_company_id, {}, request_id)
         company_id = company['data']['User'][0]['company_id']
-        
+
     # Build the pipeline object with the provided parameters
     pipeline = custom_pipeline(
         pipeline_name=params['pipeline_name'],
@@ -326,6 +334,7 @@ async def create_pipeline(token: str, params: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_available_functions():
     return [item["function"] for item in ats_function_schema if "function" in item]
+
 
 async def run_functions(token: str, function_name, params):
     if function_name == "createPipeline":
