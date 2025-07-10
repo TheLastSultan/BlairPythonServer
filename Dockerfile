@@ -1,20 +1,28 @@
-# Use an official Python runtime as a parent image
-FROM python:3.9-slim
+# 🔐 pin to a minor version you control, not "latest"
+FROM python:3.12-slim-bookworm
 
-# Set the working directory in the container
+# optional: reduce layer count & install build deps only when needed
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DEBIAN_FRONTEND=noninteractive
+
 WORKDIR /usr/app
 
-# Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 
-# Install dependencies
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+RUN apt-get update \
+ && apt-get install --no-install-recommends -y gcc build-essential libpq-dev \
+ && pip install --upgrade pip \
+ && pip install -r requirements.txt \
+ && apt-get purge -y gcc build-essential \
+ && apt-get autoremove -y \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
 
-# Copy the rest of the application code
 COPY . .
 
-# Expose the port the app runs on
 EXPOSE 8000
 
-# Run the application using Uvicorn. Adjust "main:app" if your FastAPI app is named differently.
 CMD ["uvicorn", "agent.recruiter_agent:app", "--host", "0.0.0.0", "--port", "8000"]
